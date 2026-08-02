@@ -1,0 +1,57 @@
+# Copyright (c) 2023 Xiaomi, Inc.
+# All Rights Reserved.
+# Confidential and Proprietary - Xiaomi, Inc.
+#
+on post-fs-data
+    mkdir /tmp/vendor/mqsas_common 0771 system system
+    mkdir /tmp/vendor/touch 0771 system system
+    mkdir /tmp/vendor/touch_state 0771 system system
+    mkdir /mnt/vendor/persist/touch 0775 system system
+# uke: all /dev/xiaomi-* and /sys/class/touch/* nodes are created by the
+# xiaomi_touch/nt36532_touch kernel modules, which load AFTER 'on boot' runs.
+# Applying permissions at 'on boot' silently fails (nodes do not exist yet),
+# and starting touchfeature-service before the panel registers makes its THP
+# daemon abort init permanently (hal_fops_open: xiaomi-touch ioctl cmd 3
+# returns -1 -> TpThpInitFail). Defer everything until TWRP's module loader
+# is done and the touch sysfs exists, then start the service.
+on property:twrp.modules.loaded=true
+    wait /sys/class/touch/touch_dev/abnormal_event
+    sleep 1
+    # apply permissions via script: init aborts the whole action on the
+    # first chown of a missing node, and this device lacks most phone paths
+    exec /system/bin/sh /odm/etc/touch_perms.sh
+    # Panel is registered and permissions are in place: safe to init THP now
+    start touchfeature-service
+on charger
+    write /sys/class/touch/touch_dev/touch_doze_analysis 6
+
+service touchfeature-service /odm/bin/hw/vendor.xiaomi.hw.touchfeature-service
+    interface aidl  vendor.xiaomi.hw.touchfeature.ITouchFeature/default
+    class hal
+    disabled
+    user system
+    group system system input
+    capabilities SYS_NICE
+    ioprio rt 4
+    seclabel u:r:recovery:s0
+
+
+service toucheventcheck /odm/bin/toucheventcheck
+    class main
+    user root
+    group system
+    oneshot
+    seclabel u:r:recovery:s0
+
+service panel-info-sh /system/bin/sh /odm/etc/init.panel_info.sh
+    class core
+    user root
+    oneshot
+    group root system
+    seclabel u:r:recovery:s0
+
+service touch-kmsg-init-sh /system/bin/sh /odm/etc/tp_kmsg_init.sh
+    class main
+    group root system
+    oneshot
+    seclabel u:r:recovery:s0

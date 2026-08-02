@@ -25,6 +25,8 @@
 # ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #
 
+import /odm/etc/init/vendor.xiaomi.hw.touchfeature-service.rc
+
 on early-init
     wait /sys/fs/selinux/enforce
     write /sys/fs/selinux/enforce 0
@@ -34,7 +36,7 @@ on early-fs
     write /proc/sys/walt/sched_lib_mask_force 255
 
 on fs
-    export LD_LIBRARY_PATH /system/lib64:/vendor/lib64:/vendor/lib64/hw
+    export LD_LIBRARY_PATH /system/lib64:/vendor/lib64:/vendor/lib64/hw:/odm/lib64:/odm/lib64/hw
     wait /dev/block/platform/soc/${ro.boot.bootdevice}
     symlink /dev/block/platform/soc/${ro.boot.bootdevice} /dev/block/bootdevice
     write /proc/sys/kernel/firmware_config/force_sysfs_fallback 1
@@ -54,16 +56,36 @@ on boot
     setprop sys.usb.config adb
 
 on property:twrp.modules.loaded=true
-    # Mount firmware
-    mkdir /firmware
-    mount vfat /dev/block/bootdevice/by-name/modem${ro.boot.slot_suffix} /firmware ro
-    # Load ADSP firmware for PMIC
-    wait /sys/kernel/boot_adsp/boot
-    write /sys/kernel/boot_adsp/boot 1
-    wait /sys/class/power_supply/battery
+    # 1. Create the mount point and mount the modem partition
+    mkdir /vendor/firmware_mnt 0770 system system
+    wait /dev/block/bootdevice/by-name/modem${ro.boot.slot_suffix} 2
+    mount vfat /dev/block/bootdevice/by-name/modem${ro.boot.slot_suffix} /vendor/firmware_mnt ro shortname=lower,uid=1000,gid=1000,dmask=227,fmask=337
+    
+    # 2. Force-feed the hidden Xiaomi firmware paths to the kernel's direct search
+    write /sys/module/firmware_class/parameters/path "/vendor/firmware_mnt/image,/vendor/firmware_mnt/image/kiwi,/vendor/firmware,/vendor/etc/firmware"
+
+    # 3. Trigger the delayed ADSP kick
+    start kick_adsp
+    
+    # 4. Start non-ADSP dependent daemons immediately
     start vendor.qseecomd
+    start xiaomi-uinput
+
+# Background service to delay the ADSP kick by 2 seconds.
+# This prevents the race condition where ADSP requests adsp_dtb.mdt 
+# before OrangeFox finishes mounting the vendor logical partition.
+service kick_adsp /system/bin/sh -c "sleep 2; echo start > /sys/class/remoteproc/remoteproc1/state; sleep 1; setprop vendor.adsp.started true"
+    class core
+    user root
+    group root
+    disabled
+    oneshot
+    seclabel u:r:recovery:s0
+
+# Start health-recovery ONLY after ADSP is up and the battery node exists
+on property:vendor.adsp.started=true
+    wait /sys/class/power_supply/battery 2
     start vendor.health-recovery
-    umount /firmware
 
 on property:vendor.sys.listeners.registered=true
     start vendor.ssgtzd
@@ -71,3 +93,9 @@ on property:vendor.sys.listeners.registered=true
     start vendor.weaver_nxp
     start vendor.keymint-qti
     start vendor.gatekeeper_default
+
+service xiaomi-uinput /system/bin/xiaomi-uinput
+    class main
+    user root
+    group root system
+    seclabel u:r:recovery:s0

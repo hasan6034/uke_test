@@ -410,6 +410,9 @@ subsystem mem_buf_vm
 # Ultrasound device
 /dev/usf1                 0660   system     system
 
+# xlog device
+/dev/xlog                 0660   system     audio
+
 # Ramdump devices
 /dev/ramdump*             0640   system     system
 
@@ -600,3 +603,4 @@ subsystem mem_buf_vm
 
 # Q2SPI UWB device
 /dev/q2spiuwb    0660    uwb    uwb
+/dev/xiaomi-touch 0666 system system
